@@ -36,22 +36,71 @@ class TranceptionAttention(nn.Module):
             embed_dim,
             num_heads,
         ):
+        super().__init__()
+
         self.embed_dim = embed_dim
         self.num_heads = num_heads
+        self.num_heads_per_kernel_size = num_heads // 4
         self.head_dim = embed_dim // num_heads
     
         self.to_q = nn.Linear(embed_dim, embed_dim, bias=False)
         self.to_k = nn.Linear(embed_dim, embed_dim, bias=False)
         self.to_v = nn.Linear(embed_dim, embed_dim, bias=False)
 
+        self.to_out = nn.Linear(embed_dim, embed_dim)
+        nn.init.zeros_(self.to_out.weight)
+        nn.init.zeros_(self.to_out.bias)
+
+        self.q_d_conv3 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=3)
+        self.k_d_conv3 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=3)
+        self.v_d_conv3 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=3)
+
+        self.q_d_conv5 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=5)
+        self.k_d_conv5 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=5)
+        self.v_d_conv5 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=5)
+
+        self.q_d_conv7 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=7)
+        self.k_d_conv7 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=7)
+        self.v_d_conv7 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=7)
+
+
     def forward(self, x):
         q = self.to_q(x)
         k = self.to_k(x)
         v = self.to_v(x)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b n h d', h=self.num_heads), (q, k, v))
+
+        q, k, v = map(lambda t: rearrange(t, 'b l (n1 d) -> b n1 l d', n1=self.num_heads), (q, k, v))
+        q, k, v = map(lambda t: rearrange(t, 'b (k n2) l d -> b k n2 l d', k=4), (q, k, v))
+
+        q[:, 1] = self.q_d_conv3(q[:, 1])
+        k[:, 1] = self.k_d_conv3(q[:, 1])
+        v[:, 1] = self.v_d_conv3(q[:, 1])
+
+        q[:, 2] = self.q_d_conv5(q[:, 2])
+        k[:, 2] = self.k_d_conv5(q[:, 2])
+        v[:, 2] = self.v_d_conv5(q[:, 2])
+
+        q[:, 3] = self.q_d_conv7(q[:, 3])
+        k[:, 3] = self.k_d_conv7(q[:, 3])
+        v[:, 3] = self.v_d_conv7(q[:, 3])
+
+
+        q, k, v = map(lambda t: rearrange(t, 'b k n2 l d -> b (k n2) l d', k=4), (q, k, v))
+
 
         # Scaled dot product attention
-        logit = einsum('b i h d, b j h d -> b h i j', q, k) * (self.head_dim ** -0.5)
+        logit = einsum('b n i d, b n j d -> b n i j', q, k) * (self.head_dim ** -0.5)
+
+        #
+        # TODO: Grouped ALiBi bias
+        #
+
+        attn = logit.softmax(dim=-1)
+
+        out = einsum('b n i j, b n j d -> b n i d', attn, v)
+        out = rearrange(v, 'b n l d -> b l (n d)')
+
+        return self.to_out(out)
 
 class Tranception(nn.Module):
     def __init__(
@@ -73,5 +122,10 @@ if __name__ == '__main__':
 
     conv = DepthwiseConvolution(head_dim=head_dim, kernel_size=3)
     print(conv(x).shape)
+
+    x = torch.randn(16, 128, 256)
+    attn = TranceptionAttention(embed_dim=256, num_heads=8)
+
+    print(attn(x).shape)
 
     pass
