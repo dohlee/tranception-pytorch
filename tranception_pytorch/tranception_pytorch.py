@@ -1,10 +1,38 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 from torch import einsum
 from einops import rearrange
 from einops.layers.torch import Rearrange
+
+def get_slopes(n, mode="grouped_alibi", verbose=False):
+    """
+    Function to compute the m constant for each attention head. Code has been adapted from the official ALiBi codebase at:
+    https://github.com/ofirpress/attention_with_linear_biases/blob/master/fairseq/models/transformer.py
+    """
+    def get_slopes_power_of_2(n):
+        start = (2**(-2**-(math.log2(n)-3)))
+        ratio = start
+        return [start*ratio**i for i in range(n)]
+
+    if mode == "grouped_alibi":
+        n = n // 4
+
+    if math.log2(n).is_integer():
+        result = get_slopes_power_of_2(n)                   
+    else:
+        #Workaround when the number of heads is not a power of 2
+        closest_power_of_2 = 2**math.floor(math.log2(n))  
+        result = get_slopes_power_of_2(closest_power_of_2) + get_slopes(2*closest_power_of_2)[0::2][:n-closest_power_of_2]
+
+    if mode == "grouped_alibi":
+        result = result * 4
+        if verbose:
+            print("ALiBi slopes: {}".format(result))
+
+    return result
 
 class PadLeft(nn.Module):
     def __init__(self, pad):
@@ -63,8 +91,7 @@ class TranceptionAttention(nn.Module):
         self.k_d_conv7 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=7)
         self.v_d_conv7 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=7)
 
-
-    def forward(self, x):
+    def forward(self, x, alibi):
         q = self.to_q(x)
         k = self.to_k(x)
         v = self.to_v(x)
@@ -84,15 +111,13 @@ class TranceptionAttention(nn.Module):
         k[:, 3] = self.k_d_conv7(q[:, 3])
         v[:, 3] = self.v_d_conv7(q[:, 3])
 
-
         q, k, v = map(lambda t: rearrange(t, 'b k n2 l d -> b (k n2) l d', k=4), (q, k, v))
 
-
-        # Scaled dot product attention
-        logit = einsum('b n i d, b n j d -> b n i j', q, k) * (self.head_dim ** -0.5)
+        # Scaled dot product attention + ALiBi position encoding.
+        logit = einsum('b n i d, b n j d -> b n i j', q, k) * (self.head_dim ** -0.5) + alibi
 
         #
-        # TODO: Grouped ALiBi bias
+        # TODO: causal masking in decoder
         #
 
         attn = logit.softmax(dim=-1)
@@ -106,10 +131,21 @@ class Tranception(nn.Module):
     def __init__(
             self,
             embed_dim,
+            num_heads,
+            max_length,
         ):
 
         self.embed_dim = embed_dim
         self.embedding = nn.Embedding(20, embed_dim)
+
+        # Adopted from https://github.com/ofirpress/attention_with_linear_biases/blob/master/fairseq/models/transformer.py#L742
+        self.slopes = torch.Tensor(get_slopes(num_heads))
+        #In the next line, the part after the * is what constructs the diagonal matrix (right matrix in Figure 3 in the paper). 
+        #If you run it you'll see that it doesn't exactly print out the same matrix as we have in Figure 3, but one where all rows are identical.
+        #This works because the softmax operation is invariant to translation, and our bias functions are always linear. 
+        self.alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(max_length).unsqueeze(0).unsqueeze(0).expand(num_heads, -1, -1)
+        self.alibi = self.alibi.view(num_heads, 1, max_length)
+        # NOTE: alibi will be broadcasted to (bsz, num_heads, max_length, max_length) in forward to be added to the logits.
 
     def forward(self, x):
         x = self.embedding(x)
