@@ -92,6 +92,8 @@ class TranceptionAttention(nn.Module):
         self.v_d_conv7 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=7)
 
     def forward(self, x, alibi):
+        seq_len = x.size(-2)
+
         q = self.to_q(x)
         k = self.to_k(x)
         v = self.to_v(x)
@@ -113,12 +115,12 @@ class TranceptionAttention(nn.Module):
 
         q, k, v = map(lambda t: rearrange(t, 'b k n2 l d -> b (k n2) l d', k=4), (q, k, v))
 
-        # Scaled dot product attention + ALiBi position encoding.
-        logit = einsum('b n i d, b n j d -> b n i j', q, k) * (self.head_dim ** -0.5) + alibi
+        # Scaled dot product attention + ALiBi position encoding + causal attention masking
+        causal_mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1) * (-1e-9)
+        causal_mask = causal_mask.view(1, 1, seq_len, seq_len)
+        causal_mask = causal_mask.to(x.device)
 
-        #
-        # TODO: causal masking in decoder
-        #
+        logit = einsum('b n i d, b n j d -> b n i j', q, k) * (self.head_dim ** -0.5) + alibi + causal_mask
 
         attn = logit.softmax(dim=-1)
 
