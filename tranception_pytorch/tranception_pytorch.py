@@ -136,9 +136,10 @@ class Tranception(nn.Module):
             num_heads,
             max_length,
         ):
+        super().__init__()
 
         self.embed_dim = embed_dim
-        self.embedding = nn.Embedding(20, embed_dim)
+        self.embedding = nn.Embedding(21, embed_dim)
 
         # Adopted from https://github.com/ofirpress/attention_with_linear_biases/blob/master/fairseq/models/transformer.py#L742
         self.slopes = torch.Tensor(get_slopes(num_heads))
@@ -149,21 +150,23 @@ class Tranception(nn.Module):
         self.alibi = self.alibi.view(num_heads, 1, max_length)
         # NOTE: alibi will be broadcasted to (bsz, num_heads, max_length, max_length) in forward to be added to the logits.
 
+        self.attn = TranceptionAttention(embed_dim=embed_dim, num_heads=num_heads)
+
+        self.lm_head = nn.Linear(embed_dim, 21)
+
     def forward(self, x):
         x = self.embedding(x)
+        x = self.attn(x, alibi=self.alibi)
+        x = self.lm_head(x)
 
-        pass
+        return x
 
 if __name__ == '__main__':
-    head_dim = 128
-    x = torch.randn(2, 8, 1000, head_dim)
+    x = torch.randint(0, 21, size=(1, 128))
+    model = Tranception(
+        embed_dim=256,
+        num_heads=32,
+        max_length=128,
+    )
 
-    conv = DepthwiseConvolution(head_dim=head_dim, kernel_size=3)
-    print(conv(x).shape)
-
-    x = torch.randn(16, 128, 256)
-    attn = TranceptionAttention(embed_dim=256, num_heads=8)
-
-    print(attn(x).shape)
-
-    pass
+    print(model(x).shape)
