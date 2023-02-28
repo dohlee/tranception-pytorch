@@ -7,6 +7,7 @@ import random
 import tqdm
 import os
 import wandb
+import util
 
 from torch.utils.data import Dataset, DataLoader
 from scipy.stats import pearsonr, spearmanr
@@ -161,9 +162,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', '-i', required=True)
     parser.add_argument('--output', '-o', required=True)
-    parser.add_argument('--batch-size', type=int, default=1024)     # Taken from Table 8.
-    parser.add_argument('--steps', type=int, default=150_000)       # Taken from Table 8.
-    parser.add_argument('--peak-lr', type=float, default=3e-4)      # Taken from Table 8.
+    parser.add_argument('--batch-size', type=int, default=1024)             # Taken from Table 8.
+    parser.add_argument('--annealing-steps', type=int, default=10_000)      # Taken from Appendix B.3.
+    parser.add_argument('--total-steps', type=int, default=150_000)         # Taken from Table 8.
+    parser.add_argument('--peak-lr', type=float, default=3e-4)              # Taken from Table 8.
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--use-wandb', action='store_true', default=False)
     args = parser.parse_args()
@@ -181,7 +183,7 @@ def main():
     model = model.cuda()
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr)  # AdamW taken from Table 8.
-    # TODO: scheduler
+    scheduler = util.LinearAnnealingLR(optimizer, args.steps, args.peak_lr)
     criterion = nn.CrossEntropyLoss(reduction='none')
 
     model.train()
@@ -197,7 +199,8 @@ def main():
 
         if batch % 100 == 0:
             print(loss)
-        # scheduler.step()
+
+        scheduler.step()
 
 if __name__ == '__main__':
     main()
