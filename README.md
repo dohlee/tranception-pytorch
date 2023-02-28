@@ -7,7 +7,7 @@ Implementation of Tranception, a SOTA transformer model for protein fitness pred
 ## Installation
 
 ```bash
-$ pip install tranception-pytorch
+$ pip install tranception-pytorch-dohlee
 ```
 
 ## Usage

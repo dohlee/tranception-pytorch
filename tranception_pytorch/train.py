@@ -7,7 +7,6 @@ import random
 import tqdm
 import os
 import wandb
-import util
 
 from torch.utils.data import Dataset, DataLoader
 from scipy.stats import pearsonr, spearmanr
@@ -15,122 +14,7 @@ from torch.distributions.multinomial import Multinomial
 
 from tranception_pytorch import Tranception
 from tranception_pytorch.data import MaskedProteinDataset
-
-def train(model, train_loader, optimizer, criterion, metrics_f):
-    model.train()
-
-    running_profiles, running_total_counts = [], []
-    running_profile_labels, running_total_count_labels = [], []
-
-    # Training loop with progressbar.
-    bar = tqdm.tqdm(train_loader, total=len(train_loader), leave=False)
-    for idx, batch in enumerate(bar):
-        seq = batch['seq'].cuda()
-        profile = batch['profile'].cuda()
-        total_count = batch['total_count'].cuda()
-
-        optimizer.zero_grad()
-        out = model(seq)
-        loss = multinomial_nll(out['profile'], profile) + F.mse_loss(torch.log(1 + out['total_count']), torch.log(1 + total_count))
-        loss.backward()
-        optimizer.step()
-
-        running_profiles.append(out['profile'].detach().cpu())
-        running_total_counts.append(out['total_count'].detach().cpu())
-        running_profile_labels.append(profile.cpu())
-        running_total_count_labels.append(total_count.cpu())
-
-        if idx % 100 == 0:
-            running_profiles = torch.cat(running_profiles, dim=0)
-            running_total_counts = torch.cat(running_total_counts, dim=0)
-            running_profile_labels = torch.cat(running_profile_labels, dim=0)
-            running_total_count_labels = torch.cat(running_total_count_labels, dim=0)
-
-            running_loss = multinomial_nll(running_profiles, running_profile_labels) + F.mse_loss(torch.log(1 + running_total_counts), torch.log(1 + running_total_count_labels))
-
-            loss = running_loss.item()
-            bar.set_postfix(loss=loss)
-            wandb.log({
-                'train/loss': loss,
-            })
-
-            running_output, running_label = [], []
-
-def validate(model, val_loader, criterion, metrics_f):
-    model.eval()
-
-    out_fwd, out_rev, label = [], [], []
-    with torch.no_grad():
-        for batch in val_loader:
-            wt_emb, mut_emb = batch['wt_emb'].cuda(), batch['mut_emb'].cuda()
-            _label = batch['label'].cuda().flatten()
-
-            _out_fwd = model(wt_emb, mut_emb).flatten()
-            _out_rev = model(mut_emb, wt_emb).flatten()  # Swap wt_emb and mut_emb.
-
-            out_fwd.append(_out_fwd.cpu())
-            out_rev.append(_out_rev.cpu())
-
-            label.append(_label.cpu())
-        
-    out_fwd = torch.cat(out_fwd, dim=0)
-    out_rev = torch.cat(out_rev, dim=0)
-    label = torch.cat(label, dim=0)
-
-    loss = criterion(out_fwd, label).item()
-    metrics = {k: f(out_fwd, label) for k, f in metrics_f.items()}
-
-    # Add antisymmetry metrics.
-    metrics['pearson_fr'] = pearsonr(out_fwd, out_rev)[0] 
-    metrics['delta'] = torch.cat([out_fwd, out_rev], dim=0).mean()
-
-    wandb.log({
-        'val/loss': loss,
-        'val/pearson': metrics['pearson'],
-        'val/spearman': metrics['spearman'],
-        'val/pearson_fr': metrics['pearson_fr'],
-        'val/delta': metrics['delta'],
-    })
-
-    return loss, metrics
-
-def test(model, val_loader, criterion, metrics_f):
-    model.eval()
-
-    out_fwd, out_rev, label = [], [], []
-    with torch.no_grad():
-        for batch in val_loader:
-            wt_emb, mut_emb = batch['wt_emb'].cuda(), batch['mut_emb'].cuda()
-            _label = batch['label'].cuda().flatten()
-
-            _out_fwd = model(wt_emb, mut_emb).flatten()
-            _out_rev = model(mut_emb, wt_emb).flatten()  # Swap wt_emb and mut_emb.
-
-            out_fwd.append(_out_fwd.cpu())
-            out_rev.append(_out_rev.cpu())
-
-            label.append(_label.cpu())
-        
-    out_fwd = torch.cat(out_fwd, dim=0)
-    out_rev = torch.cat(out_rev, dim=0)
-    label = torch.cat(label, dim=0)
-
-    loss = criterion(out_fwd, label).item()
-    metrics = {k: f(out_fwd, label) for k, f in metrics_f.items()}
-
-    # Add antisymmetry metrics.
-    metrics['pearson_fr'] = pearsonr(out_fwd, out_rev)[0] 
-    metrics['delta'] = torch.cat([out_fwd, out_rev], dim=0).mean()
-
-    wandb.log({
-        'test/loss': loss,
-        'test/pearson': metrics['pearson'],
-        'test/spearman': metrics['spearman'],
-        'test/pearson_fr': metrics['pearson_fr'],
-        'test/delta': metrics['delta'],
-    })
-
-    return loss, metrics
+import tranception_pytorch.util as util
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -176,31 +60,62 @@ def main():
 
     wandb.init(project='tranception-pytorch', config=args, reinit=True)
 
-    train_set = MaskedProteinDataset(args.input)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=16, pin_memory=True)
+    # Testing Tranception S. Hyperparameters taken from Table 5.
+    num_heads = 12
+    num_layers = 12
+    embed_dim = 768
+    max_length = 1024
 
-    model = Tranception()
+    model = Tranception(
+        embed_dim=embed_dim,
+        num_heads=num_heads,
+        num_layers=num_layers,
+        max_length=max_length,
+    )
     model = model.cuda()
 
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr)  # AdamW taken from Table 8.
-    scheduler = util.LinearAnnealingLR(optimizer, args.steps, args.peak_lr)
+    optimizer = optim.AdamW(model.parameters(), lr=args.peak_lr)  # AdamW taken from Table 8.
+    scheduler = util.LinearAnnealingLR(
+        optimizer,
+        num_annealing_steps=args.annealing_steps,
+        num_total_steps=args.total_steps,
+    )
     criterion = nn.CrossEntropyLoss(reduction='none')
 
+    train_set = MaskedProteinDataset(
+        args.input,
+        mask_prob=0.15,
+        mask_token=20,
+        max_len=1024,
+    )
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=16, pin_memory=True)
+
+    print('Starting training...')
     model.train()
-    for batch in cycle(train_loader, args.steps):
-        # train(model, train_loader, optimizer, criterion)
+
+    cnt = 0
+    for batch in cycle(train_loader, args.total_steps):
         seq, masked_seq, mask = batch['seq'].cuda(), batch['masked_seq'].cuda(), batch['mask'].cuda()
+        # Note that seq is not one-hot encoded. It's just a sequence of integers.
 
         optimizer.zero_grad()
-        out = model(masked_seq)
-        loss = criterion(out, seq) * mask
+        out = model(masked_seq)             # (batch_size, seq_len, vocab_size)
+
+        # Loss is computed only for masked positions. (where mask==1)
+        loss = criterion(out.view(-1, 21), seq.view(-1)) * mask.view(-1)   # (batch_size, seq_len)
+        loss = loss.sum() / mask.sum()
         loss.backward()
+
         optimizer.step()
 
-        if batch % 100 == 0:
+        if cnt % 100 == 0:
             print(loss)
+            wandb.log({
+                'train/loss': loss,
+            })
 
         scheduler.step()
+        cnt += 1
 
 if __name__ == '__main__':
     main()

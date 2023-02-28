@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-  name = 'tranception-pytorch',
+  name = 'tranception-pytorch-dohlee',
   packages = find_packages(exclude=[]),
   include_package_data = True,
   version = '0.0.1',

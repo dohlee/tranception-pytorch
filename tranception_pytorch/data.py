@@ -7,20 +7,37 @@ from torch.utils.data import Dataset, DataLoader
 from Bio import SeqIO
 
 a2i = dict(zip('ACDEFGHIKLMNPQRSTVWY', range(20)))
+replace_dict = {
+    'X': 'ACDEFGHIKLMNPQRSTVWY',
+    'B': 'DN',
+    'Z': 'EQ',
+    'J': 'IL',
+}
+
+def replace_with_random(seq, replace_dict):
+    return ''.join([random.choice(replace_dict.get(a, a)) for a in seq])
 
 class MaskedProteinDataset(Dataset):
     def __init__(self, fasta_fp, mask_prob=0.15, mask_token=20, max_len=1024):
         if fasta_fp.endswith('.gz'):
             with gzip.open(fasta_fp, 'rt') as fp:
-                self.records = list(SeqIO.parse(fp, 'fasta'))
+                records = list(SeqIO.parse(fp, 'fasta'))
         else:
-            self.records = list(SeqIO.parse(fasta_fp, 'fasta'))
+            records = list(SeqIO.parse(fasta_fp, 'fasta'))
         
-        print(f'Loaded {len(self.records)} records from {fasta_fp}.')
+        print(f'Loaded {len(records)} records from {fasta_fp}.')
+        self.records = self._preprocess_records(records)
+        print(f'After preprocessing, {len(self.records)} records left.')
 
         self.mask_prob = mask_prob
         self.mask_token = mask_token
         self.max_len = max_len
+    
+    def _preprocess_records(self, records):
+        # Remove records with non-standard amino acids (O and U).
+        # And remove records with two or more X's.
+        records = [r for r in records if not any(a in 'OU' for a in r.seq) and r.seq.count('X') < 2]
+        return records
     
     def _crop_seq_to_max_len(self, seq):
         start = random.randint(0, len(seq) - self.max_len)
@@ -31,6 +48,9 @@ class MaskedProteinDataset(Dataset):
 
     def __getitem__(self, idx):
         seq = self.records[idx].seq.upper()
+
+        # Impute non-standard amino acids.
+        seq = replace_with_random(seq, replace_dict)
 
         # Crop sequence.
         if len(seq) > self.max_len:
@@ -57,7 +77,7 @@ class MaskedProteinDataset(Dataset):
         }
     
 if __name__ == '__main__':
-    dataset = MaskedProteinLMDataset('../data/uniprot_sprot.fasta.gz')
+    dataset = MaskedProteinDataset('../data/uniprot_sprot.fasta.gz')
     loader = DataLoader(dataset, batch_size=16)
 
     for batch in loader:

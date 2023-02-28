@@ -7,6 +7,15 @@ from torch import einsum
 from einops import rearrange
 from einops.layers.torch import Rearrange
 
+from functools import partial
+
+class SquaredReLU(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return torch.relu(x) ** 2
+
 def get_slopes(n, mode="grouped_alibi", verbose=False):
     """
     Function to compute the m constant for each attention head. Code has been adapted from the official ALiBi codebase at:
@@ -91,9 +100,7 @@ class TranceptionAttention(nn.Module):
         self.k_d_conv7 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=7)
         self.v_d_conv7 = DepthwiseConvolution(head_dim=self.head_dim, kernel_size=7)
 
-    def forward(self, x, alibi):
-        seq_len = x.size(-2)
-
+    def forward(self, x, alibi, causal_mask):
         q = self.to_q(x)
         k = self.to_k(x)
         v = self.to_v(x)
@@ -116,10 +123,6 @@ class TranceptionAttention(nn.Module):
         q, k, v = map(lambda t: rearrange(t, 'b k n2 l d -> b (k n2) l d', k=4), (q, k, v))
 
         # Scaled dot product attention + ALiBi position encoding + causal attention masking
-        causal_mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1) * (-1e-9)
-        causal_mask = causal_mask.view(1, 1, seq_len, seq_len)
-        causal_mask = causal_mask.to(x.device)
-
         logit = einsum('b n i d, b n j d -> b n i j', q, k) * (self.head_dim ** -0.5) + alibi + causal_mask
 
         attn = logit.softmax(dim=-1)
@@ -129,11 +132,47 @@ class TranceptionAttention(nn.Module):
 
         return self.to_out(out)
 
+class FeedForward(nn.Module):
+    def __init__(self, embed_dim, inner_dim=None):
+        super().__init__()
+
+        inner_dim = inner_dim or 4 * embed_dim
+
+        self.main = nn.Sequential(
+            nn.LayerNorm(embed_dim),
+            nn.Linear(embed_dim, inner_dim),
+            SquaredReLU(),
+            nn.Linear(inner_dim, embed_dim),
+            nn.LayerNorm(embed_dim),
+        )
+    
+    def forward(self, x):
+        return self.main(x)
+    
+class TranceptionBlock(nn.Module):
+    def __init__(self, embed_dim, num_heads, alibi, causal_mask):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(embed_dim)
+        self.attn = TranceptionAttention(embed_dim, num_heads)
+        self.ln2 = nn.LayerNorm(embed_dim)
+
+        self.ff = FeedForward(embed_dim)
+        self.register_buffer('alibi', alibi)
+        self.register_buffer('causal_mask', causal_mask)
+    
+    def forward(self, x):
+        x_res = self.ln1(x)
+        x = self.attn(x_res, self.alibi, self.causal_mask) + x_res
+        x = self.ln2(x)
+
+        return x
+
 class Tranception(nn.Module):
     def __init__(
             self,
             embed_dim,
             num_heads,
+            num_layers,
             max_length,
         ):
         super().__init__()
@@ -146,27 +185,41 @@ class Tranception(nn.Module):
         #In the next line, the part after the * is what constructs the diagonal matrix (right matrix in Figure 3 in the paper). 
         #If you run it you'll see that it doesn't exactly print out the same matrix as we have in Figure 3, but one where all rows are identical.
         #This works because the softmax operation is invariant to translation, and our bias functions are always linear. 
-        self.alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(max_length).unsqueeze(0).unsqueeze(0).expand(num_heads, -1, -1)
-        self.alibi = self.alibi.view(num_heads, 1, max_length)
+        alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(max_length).unsqueeze(0).unsqueeze(0).expand(num_heads, -1, -1)
+        alibi = alibi.view(num_heads, 1, max_length)
         # NOTE: alibi will be broadcasted to (bsz, num_heads, max_length, max_length) in forward to be added to the logits.
+        self.register_buffer('alibi', alibi)
+        
+        causal_mask = torch.triu(torch.ones(max_length, max_length), diagonal=1) * (-1e-9)
+        causal_mask = causal_mask.view(1, 1, max_length, max_length)
+        self.register_buffer('causal_mask', causal_mask)
 
-        self.attn = TranceptionAttention(embed_dim=embed_dim, num_heads=num_heads)
+        self.blocks = nn.Sequential(*[
+            TranceptionBlock(
+                embed_dim=embed_dim,
+                num_heads=num_heads,
+                alibi=self.alibi,
+                causal_mask=self.causal_mask,
+            )
+            for _ in range(num_layers)
+        ])
 
         self.lm_head = nn.Linear(embed_dim, 21)
 
     def forward(self, x):
         x = self.embedding(x)
-        x = self.attn(x, alibi=self.alibi)
+        x = self.blocks(x)
         x = self.lm_head(x)
 
         return x
 
 if __name__ == '__main__':
-    x = torch.randint(0, 21, size=(1, 128))
+    x = torch.randint(0, 21, size=(1, 1024))
     model = Tranception(
         embed_dim=256,
         num_heads=32,
-        max_length=128,
+        max_length=1024,
+        num_layers=6,
     )
 
     print(model(x).shape)
