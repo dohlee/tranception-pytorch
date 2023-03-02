@@ -4,6 +4,7 @@ import random
 import gzip
 
 from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
 from Bio import SeqIO
 
 a2i = dict(zip('ACDEFGHIKLMNPQRSTVWY', range(20)))
@@ -18,7 +19,7 @@ def replace_with_random(seq, replace_dict):
     return ''.join([random.choice(replace_dict.get(a, a)) for a in seq])
 
 class MaskedProteinDataset(Dataset):
-    def __init__(self, fasta_fp, mask_prob=0.15, mask_token=20, max_len=1024):
+    def __init__(self, fasta_fp, mask_prob=0.15, mask_token=20, max_len=1024, p_reverse=0.5):
         if fasta_fp.endswith('.gz'):
             with gzip.open(fasta_fp, 'rt') as fp:
                 records = list(SeqIO.parse(fp, 'fasta'))
@@ -32,11 +33,12 @@ class MaskedProteinDataset(Dataset):
         self.mask_prob = mask_prob
         self.mask_token = mask_token
         self.max_len = max_len
+        self.p_reverse = p_reverse
     
     def _preprocess_records(self, records):
         # Remove records with non-standard amino acids (O and U).
         # And remove records with two or more X's.
-        records = [r for r in records if not any(a in 'OU' for a in r.seq) and r.seq.count('X') < 2]
+        records = [r for r in tqdm(records) if not any(a in 'OU' for a in r.seq) and r.seq.count('X') < 2]
         return records
     
     def _crop_seq_to_max_len(self, seq):
@@ -71,7 +73,7 @@ class MaskedProteinDataset(Dataset):
             mask = torch.cat([mask, torch.zeros(self.max_len - len(mask), dtype=torch.bool)])
 
         return {
-            'seq': seq,
+            'seq': seq if random.random() < self.p_reverse else seq.flip(0),
             'masked_seq': masked_seq,
             'mask': mask,
         }

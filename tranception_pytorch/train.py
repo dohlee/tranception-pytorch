@@ -109,9 +109,10 @@ def main():
         optimizer.step()
 
         if cnt % 100 == 0:
-            print(loss)
+            print(f'Iteration {cnt}, loss={loss.item()}')
+
             wandb.log({
-                'train/loss': loss,
+                'train/loss': loss.item(),
             })
 
         scheduler.step()
