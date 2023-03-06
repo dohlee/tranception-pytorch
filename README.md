@@ -13,6 +13,27 @@ $ pip install tranception-pytorch-dohlee
 ## Usage
 
 ```python
+import torch
+from tranception_pytorch import Tranception
+
+# Parameters for Tranception S
+num_heads = 12
+num_layers = 12
+embed_dim = 768
+max_length = 1024
+
+model = Tranception(
+    embed_dim=embed_dim,
+    num_heads=num_heads,
+    num_layers=num_layers,
+    max_length=max_length,
+)
+model = model.cuda()
+
+x = torch.randn([1, 1000])  # batch, seq_len (encoded as integer in [0, 21], 21 for [MASK])
+
+# Autoregressive inference
+out = model.log_likelihood(x)
 ```
 
 ## Citation

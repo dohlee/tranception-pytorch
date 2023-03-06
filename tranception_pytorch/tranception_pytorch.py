@@ -212,9 +212,19 @@ class Tranception(nn.Module):
         x = self.lm_head(x)
 
         return x
+    
+    def log_likelihood(self, x):
+        if x.ndim == 1:
+            x = x.unsqueeze(0)
+        
+        bsz, length = x.shape[0], x.shape[1]
+        out = F.log_softmax(self.forward(x), dim=-1) # (bsz, length, 21)
+        mask = torch.zeros((bsz, 21, length), device=x.device).scatter_(1, x.unsqueeze(1), 1.0).permute(0, 2, 1)
+
+        return (out * mask).sum(dim=-1).sum(dim=-1)
 
 if __name__ == '__main__':
-    x = torch.randint(0, 21, size=(1, 1024))
+    x = torch.randint(0, 21, size=(2, 1024))
     model = Tranception(
         embed_dim=256,
         num_heads=32,
@@ -223,3 +233,4 @@ if __name__ == '__main__':
     )
 
     print(model(x).shape)
+    print(model.log_likelihood(x))

@@ -29,14 +29,14 @@ def seed_everything(seed):
 
 def cycle(loader, n):
     """Cycle through a dataloader indefinitely."""
-    cnt, stop_flag = 0, False
-    while stop_flag is False:
+    cnt, to_stop = 0, False
+    while not to_stop:
         for batch in loader:
             yield batch
 
             cnt += 1
             if cnt == n:
-                stop_flag = True
+                to_stop = True
                 break
 
 def main():
@@ -87,6 +87,7 @@ def main():
         mask_prob=0.15,
         mask_token=20,
         max_len=1024,
+        p_reverse=0.5,
     )
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=16, pin_memory=True)
 
