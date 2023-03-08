@@ -110,10 +110,10 @@ def main():
         # Loss is computed only for masked positions. (where mask==1)
         loss = criterion(out.view(-1, 21), seq.view(-1)) * mask.view(-1)   # (batch_size, seq_len)
         loss = loss.sum() / mask.sum()
+        running_loss.append(loss.item())
+
         loss = loss / args.gradient_accumulation_steps
         loss.backward()
-
-        running_loss.append(loss.item())
 
         if cnt % args.gradient_accumulation_steps == 0:
             optimizer.step()
