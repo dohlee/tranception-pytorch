@@ -47,6 +47,7 @@ def main():
     parser.add_argument('--input', '-i', required=True)
     parser.add_argument('--output', '-o', required=True)
     parser.add_argument('--batch-size', type=int, default=1024)             # Taken from Table 8.
+    parser.add_argument('--gradient-accumulation-steps', type=int, default=1)
     parser.add_argument('--annealing-steps', type=int, default=10_000)      # Taken from Appendix B.3.
     parser.add_argument('--total-steps', type=int, default=150_000)         # Taken from Table 8.
     parser.add_argument('--peak-lr', type=float, default=3e-4)              # Taken from Table 8.
@@ -74,7 +75,11 @@ def main():
     )
     model = model.cuda()
 
-    optimizer = optim.AdamW(model.parameters(), lr=args.peak_lr)  # AdamW taken from Table 8.
+    optimizer = optim.AdamW(  # AdamW taken from Table 8.
+        model.parameters(),
+        lr=args.peak_lr,
+        weight_decay=1e-4,
+    )
     scheduler = util.LinearAnnealingLR(
         optimizer,
         num_annealing_steps=args.annealing_steps,
@@ -95,26 +100,31 @@ def main():
     model.train()
 
     cnt = 0
+    optimizer.zero_grad()
+    running_loss = []
     for batch in cycle(train_loader, args.total_steps):
         seq, masked_seq, mask = batch['seq'].cuda(), batch['masked_seq'].cuda(), batch['mask'].cuda()
         # Note that seq is not one-hot encoded. It's just a sequence of integers.
-
-        optimizer.zero_grad()
         out = model(masked_seq)             # (batch_size, seq_len, vocab_size)
 
         # Loss is computed only for masked positions. (where mask==1)
         loss = criterion(out.view(-1, 21), seq.view(-1)) * mask.view(-1)   # (batch_size, seq_len)
         loss = loss.sum() / mask.sum()
+        loss = loss / args.gradient_accumulation_steps
         loss.backward()
 
-        optimizer.step()
+        running_loss.append(loss.item())
+
+        if cnt % args.gradient_accumulation_steps == 0:
+            optimizer.step()
+            optimizer.zero_grad()
 
         if cnt % 100 == 0:
-            print(f'Iteration {cnt}, loss={loss.item()}')
-
+            print(f'Iteration {cnt}, loss={np.mean(running_loss):.4f}')
             wandb.log({
-                'train/loss': loss.item(),
+                'train/loss': np.mean(running_loss),
             })
+            running_loss = []
 
         scheduler.step()
         cnt += 1
