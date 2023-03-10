@@ -94,7 +94,14 @@ def main():
         max_len=1024,
         p_reverse=0.5,
     )
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=16, pin_memory=True)
+    train_loader = DataLoader(
+        train_set,
+        batch_size=args.batch_size,
+        shuffle=True,
+        drop_last=True,
+        num_workers=32,
+        pin_memory=True
+    )
 
     print('Starting training...')
     model.train()
@@ -118,6 +125,8 @@ def main():
         if cnt % args.gradient_accumulation_steps == 0:
             optimizer.step()
             optimizer.zero_grad()
+            scheduler.step()
+            cnt += 1
 
         if cnt % 100 == 0:
             print(f'Iteration {cnt}, loss={np.mean(running_loss):.4f}')
@@ -126,9 +135,6 @@ def main():
                 'train/lr': get_lr(optimizer),
             })
             running_loss = []
-
-        scheduler.step()
-        cnt += 1
 
 if __name__ == '__main__':
     main()
