@@ -1,20 +1,17 @@
+import os
+import random
+
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
-import numpy as np
-import random
-import tqdm
-import os
+from torch.utils.data import DataLoader
+
+import tranception_pytorch.util as util
 import wandb
-
-from torch.utils.data import Dataset, DataLoader
-from scipy.stats import pearsonr, spearmanr
-from torch.distributions.multinomial import Multinomial
-
 from tranception_pytorch import Tranception
 from tranception_pytorch.data import MaskedProteinDataset
-import tranception_pytorch.util as util
+
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -39,8 +36,11 @@ def cycle(loader, n):
                 to_stop = True
                 break
 
+def get_lr(optimizer):
+    for param_group in optimizer.param_groups:
+        return param_group['lr']
+
 def main():
-    import pandas as pd
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -123,6 +123,7 @@ def main():
             print(f'Iteration {cnt}, loss={np.mean(running_loss):.4f}')
             wandb.log({
                 'train/loss': np.mean(running_loss),
+                'train/lr': get_lr(optimizer),
             })
             running_loss = []
 

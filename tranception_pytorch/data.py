@@ -1,11 +1,9 @@
 import torch
-import torch.nn as nn
 import random
-import gzip
+import h5py
 
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from Bio import SeqIO
 
 a2i = dict(zip('ACDEFGHIKLMNPQRSTVWY', range(20)))
 replace_dict = {
@@ -13,32 +11,31 @@ replace_dict = {
     'B': 'DN',
     'Z': 'EQ',
     'J': 'IL',
+
+    # Just dummy
+    'O': 'A',
+    'U': 'A',
 }
+def is_valid_sequence(seq):
+    return not any(a in 'OU' for a in seq) and seq.count('X') < 2
 
 def replace_with_random(seq, replace_dict):
     return ''.join([random.choice(replace_dict.get(a, a)) for a in seq])
 
 class MaskedProteinDataset(Dataset):
-    def __init__(self, fasta_fp, mask_prob=0.15, mask_token=20, max_len=1024, p_reverse=0.5):
-        if fasta_fp.endswith('.gz'):
-            with gzip.open(fasta_fp, 'rt') as fp:
-                records = list(SeqIO.parse(fp, 'fasta'))
-        else:
-            records = list(SeqIO.parse(fasta_fp, 'fasta'))
+    def __init__(self, h5_fp, mask_prob=0.15, mask_token=20, max_len=1024, p_reverse=0.5):
+        f = h5py.File(h5_fp, 'r')
+        self.records = f['seq']
         
-        print(f'Loaded {len(records)} records from {fasta_fp}.')
-        self.records = self._preprocess_records(records)
-        print(f'After preprocessing, {len(self.records)} records left.')
-
         self.mask_prob = mask_prob
         self.mask_token = mask_token
         self.max_len = max_len
         self.p_reverse = p_reverse
-    
+
     def _preprocess_records(self, records):
         # Remove records with non-standard amino acids (O and U).
         # And remove records with two or more X's.
-        records = [r for r in tqdm(records) if not any(a in 'OU' for a in r.seq) and r.seq.count('X') < 2]
+        records = [r for r in tqdm(records) if is_valid_sequence(r.seq)]
         return records
     
     def _crop_seq_to_max_len(self, seq):
@@ -48,8 +45,12 @@ class MaskedProteinDataset(Dataset):
     def __len__(self):
         return len(self.records)
 
+    def __del__(self):
+        self.records.file.close()
+
     def __getitem__(self, idx):
-        seq = self.records[idx].seq.upper()
+        seq = self.records[idx].decode()  # Convert bytes to string.
+        valid = is_valid_sequence(seq)
 
         # Impute non-standard amino acids.
         seq = replace_with_random(seq, replace_dict)
@@ -75,19 +76,18 @@ class MaskedProteinDataset(Dataset):
         return {
             'seq': seq if random.random() < self.p_reverse else seq.flip(0),
             'masked_seq': masked_seq,
-            'mask': mask,
+            # Invalid sequences do not participate in training.
+            'mask': mask if valid else torch.zeros_like(mask),
         }
     
 if __name__ == '__main__':
-    dataset = MaskedProteinDataset('../data/uniprot_sprot.fasta.gz')
-    loader = DataLoader(dataset, batch_size=16)
+    dataset = MaskedProteinDataset('../data/uniref50.h5')
+    loader = DataLoader(dataset, num_workers=16, batch_size=32)
 
-    for batch in loader:
-        print(batch['seq'])
-        print(batch['seq'].shape)
+    for batch in tqdm(loader):
+        # print(batch['seq'])
+        # print(batch['seq'].shape)
 
-        print(batch['mask'])
-        print(batch['mask'].shape)
-
-        break
-
+        # print(batch['mask'])
+        # print(batch['mask'].shape)
+        pass
