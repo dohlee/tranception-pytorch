@@ -109,7 +109,7 @@ def main():
     cnt = 0
     optimizer.zero_grad()
     running_loss = []
-    for batch in cycle(train_loader, args.total_steps):
+    for batch in cycle(train_loader, args.total_steps * args.gradient_accumulation_steps):
         seq, masked_seq, mask = batch['seq'].cuda(), batch['masked_seq'].cuda(), batch['mask'].cuda()
         # Note that seq is not one-hot encoded. It's just a sequence of integers.
         out = model(masked_seq)             # (batch_size, seq_len, vocab_size)
@@ -126,15 +126,17 @@ def main():
             optimizer.step()
             optimizer.zero_grad()
             scheduler.step()
-            cnt += 1
 
         if cnt % 100 == 0:
             print(f'Iteration {cnt}, loss={np.mean(running_loss):.4f}')
             wandb.log({
                 'train/loss': np.mean(running_loss),
                 'train/lr': get_lr(optimizer),
+                'train/step': cnt // args.gradient_accumulation_steps
             })
             running_loss = []
+
+        cnt += 1
 
 if __name__ == '__main__':
     main()
