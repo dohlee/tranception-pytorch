@@ -1,6 +1,7 @@
 spliceai_train_code/
 
 data/
+ckpts/
 note/.ipynb_checkpoints/
 
 *.egg-info/
