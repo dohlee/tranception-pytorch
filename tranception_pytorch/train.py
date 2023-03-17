@@ -140,7 +140,7 @@ def main():
                 os.makedirs(os.path.dirname(args.output))
 
             idx = cnt // args.gradient_accumulation_steps
-            torch.save(model.state_dict(), f'{args.output}_{idx}.pt')
+            torch.save(model.state_dict(), f'{args.output}_step{idx}.pt')
 
         cnt += 1
 
