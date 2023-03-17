@@ -12,7 +12,6 @@ import wandb
 from tranception_pytorch import Tranception
 from tranception_pytorch.data import MaskedProteinDataset
 
-
 def seed_everything(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -45,7 +44,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', '-i', required=True)
-    parser.add_argument('--output', '-o', required=True)
+    parser.add_argument('--output', '-o', help='Output prefix.', required=True)
     parser.add_argument('--batch-size', type=int, default=1024)             # Taken from Table 8.
     parser.add_argument('--gradient-accumulation-steps', type=int, default=1)
     parser.add_argument('--annealing-steps', type=int, default=10_000)      # Taken from Appendix B.3.
@@ -135,6 +134,10 @@ def main():
                 'train/step': cnt // args.gradient_accumulation_steps
             })
             running_loss = []
+
+        if (cnt // args.gradient_accumulation_steps) % 25000 == 0:
+            idx = cnt // args.gradient_accumulation_steps
+            torch.save(model.state_dict(), f'{args.output}_{idx}.pt')
 
         cnt += 1
 
