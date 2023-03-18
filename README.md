@@ -36,6 +36,10 @@ x = torch.randn([1, 1000])  # batch, seq_len (encoded as integer in [0, 21], 21 
 out = model.log_likelihood(x)
 ```
 
+## Reproduction status
+
+Live training metrics for Tranception S model using UniRef50 can be found [here](https://wandb.ai/dohlee/tranception-pytorch/reports/Tranception-training--VmlldzozODIyODI0).
+
 ## Citation
 ```bibtex
 @inproceedings{notin2022tranception,
